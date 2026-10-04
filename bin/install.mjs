@@ -188,6 +188,26 @@ function readTemplateText(templateDir, fileName) {
   return fs.readFileSync(path.join(templateDir, fileName), "utf8");
 }
 
+const NPMRC_LEGACY = "legacy-peer-deps=true\n";
+
+/** ESLint 10 + eslint-plugin-jsx-a11y needs legacy peer resolution (see next-ocr). */
+/** @param {string} targetDir @param {boolean} force */
+function ensureLegacyPeerDepsNpmrc(targetDir, force) {
+  const dest = path.join(targetDir, ".npmrc");
+  if (fs.existsSync(dest) && !force) {
+    const existing = fs.readFileSync(dest, "utf8");
+    if (existing.includes("legacy-peer-deps")) {
+      console.log("  skip (exists): .npmrc");
+      return;
+    }
+    fs.writeFileSync(dest, `${existing.trimEnd()}\n${NPMRC_LEGACY}`);
+    console.log("  updated: .npmrc (legacy-peer-deps=true)");
+    return;
+  }
+  fs.writeFileSync(dest, NPMRC_LEGACY);
+  console.log("  wrote: .npmrc");
+}
+
 /** @param {string} templateDir @param {string} targetDir @param {string} relPath @param {boolean} force */
 function copyIfAllowed(templateDir, targetDir, relPath, force) {
   const src = path.join(templateDir, relPath);
@@ -400,7 +420,7 @@ async function main() {
   }
 
   if (layers.eslint) {
-    copyIfAllowed(templateDir, targetDir, ".npmrc", force);
+    ensureLegacyPeerDepsNpmrc(targetDir, force);
     let eslintText = readTemplateText(templateDir, "eslint.config.mjs");
     eslintText = buildEslintConfig(
       eslintText.replace("__LINT_STACK_ESLINT_FILES_ARRAY__", eslintFilesJson),
@@ -460,7 +480,11 @@ async function main() {
 
   if (!flags.noInstall) {
     console.log("\nRunning npm install…\n");
-    const install = spawnSync("npm", ["install"], {
+    const installArgs = ["install"];
+    if (layers.eslint) {
+      installArgs.push("--legacy-peer-deps");
+    }
+    const install = spawnSync("npm", installArgs, {
       cwd: targetDir,
       stdio: "inherit",
       shell: true,

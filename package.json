@@ -1,6 +1,6 @@
 {
   "name": "node-lint-stack",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Install Biome + ESLint (Sonar parity) + React Compiler marker + Stylelint into any Node project",
   "type": "module",
@@ -10,7 +10,15 @@
   "files": [
     "bin/install.mjs",
     "bin/pick-layers.mjs",
-    "template",
+    "template/.lint-stack.json",
+    "template/.npmrc",
+    "template/biome.json",
+    "template/biome.next-snippet.json",
+    "template/eslint.config.mjs",
+    "template/eslint.sonar-extended.mjs",
+    "template/scripts/lint.mjs",
+    "template/stylelint.config.mjs",
+    "template/stylelint.sonar-contrast.mjs",
     "stack.manifest.json",
     "README.md"
   ],
