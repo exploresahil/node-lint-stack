@@ -255,19 +255,6 @@ async function main() {
   for (let i = 0; i < LAYERS.length; i += 1) {
     const outcome = await runLayer(LAYERS[i], i, LAYERS.length);
     results.push(outcome);
-    if (!outcome.ok) {
-      for (let j = i + 1; j < LAYERS.length; j += 1) {
-        results.push({
-          id: LAYERS[j].id,
-          short: LAYERS[j].short,
-          ok: false,
-          skipped: true,
-          duration: "—",
-          code: -1,
-        });
-      }
-      break;
-    }
   }
 
   process.exit(printSummary(results));
