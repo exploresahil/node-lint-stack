@@ -15,7 +15,7 @@ npx github:exploresahil/node-lint-stack
 Pin a branch:
 
 ```bash
-npx github:exploresahil/node-lint-stack#main
+npx github:exploresahil/node-lint-stack@main
 ```
 
 Use your fork or another URL:
