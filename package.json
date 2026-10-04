@@ -1,6 +1,6 @@
 {
   "name": "node-lint-stack",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Install Biome + ESLint (Sonar parity) + React Compiler marker + Stylelint into any Node project",
   "type": "module",

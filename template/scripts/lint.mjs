@@ -177,13 +177,42 @@ function extFilter(relPaths, extSet) {
   return relPaths.filter((p) => extSet.has(path.posix.extname(p)));
 }
 
-/** @param {string} name */
-function localBin(name) {
-  const base = path.join(projectRoot, "node_modules", ".bin", name);
-  if (process.platform === "win32") {
-    return `${base}.cmd`;
+/** @type {Record<string, [packageName: string, binRelative: string]>} */
+const TOOL_CLI = {
+  biome: ["@biomejs/biome", "bin/biome"],
+  eslint: ["eslint", "bin/eslint.js"],
+  stylelint: ["stylelint", "bin/stylelint.mjs"],
+  "react-compiler-marker": ["react-compiler-marker", "bin/cli.js"],
+};
+
+/** @param {string} tool @param {string[]} args */
+function spawnCli(tool, args) {
+  const spec = TOOL_CLI[tool];
+  if (!spec) {
+    throw new Error(`Unknown lint tool: ${tool}`);
   }
-  return base;
+  const [pkg, rel] = spec;
+  const entry = path.join(projectRoot, "node_modules", pkg, rel);
+  return spawn(process.execPath, [entry, ...args], {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/** Marker resolves babel-plugin from the scan directory; always use the repo root install. */
+function reactCompilerMarkerArgs(scanRoot) {
+  /** @type {string[]} */
+  const args = [scanRoot];
+  const pluginPath = path.join(
+    projectRoot,
+    "node_modules",
+    "babel-plugin-react-compiler",
+  );
+  if (fs.existsSync(pluginPath)) {
+    args.push("--babel-plugin-path", pluginPath);
+  }
+  return args;
 }
 
 /** @param {string} relPosix */
@@ -219,13 +248,13 @@ function buildLintPlan(argv) {
 /**
  * @param {string} layerId
  * @param {{ mode: 'full' | 'files'; paths: string[]; roots: string[] }} plan
- * @returns {{ skip?: boolean; skipReason?: string; bin: string; args: string[]; label: string } | null}
+ * @returns {{ skip?: boolean; skipReason?: string; tool: string; args: string[]; label: string } | null}
  */
 function layerInvocation(layerId, plan) {
   if (layerId === "biome") {
     if (plan.mode === "full") {
       return {
-        bin: localBin("biome"),
+        tool: "biome",
         args: ["check", ...plan.roots],
         label: `biome check ${plan.roots.join(" ")}`,
       };
@@ -235,7 +264,7 @@ function layerInvocation(layerId, plan) {
       return { skip: true, skipReason: "no Biome-compatible files in path list" };
     }
     return {
-      bin: localBin("biome"),
+      tool: "biome",
       args: ["check", ...files],
       label: `biome check ${files.join(" ")}`,
     };
@@ -244,7 +273,7 @@ function layerInvocation(layerId, plan) {
   if (layerId === "eslint") {
     if (plan.mode === "full") {
       return {
-        bin: localBin("eslint"),
+        tool: "eslint",
         args: [...plan.roots, "--max-warnings", "0"],
         label: `eslint ${plan.roots.join(" ")} --max-warnings 0`,
       };
@@ -254,7 +283,7 @@ function layerInvocation(layerId, plan) {
       return { skip: true, skipReason: "no ESLint-compatible files in path list" };
     }
     return {
-      bin: localBin("eslint"),
+      tool: "eslint",
       args: [...files, "--max-warnings", "0"],
       label: `eslint ${files.join(" ")} --max-warnings 0`,
     };
@@ -268,10 +297,11 @@ function layerInvocation(layerId, plan) {
       }
     }
     const scanRoot = plan.mode === "files" ? markerScanRoot(plan.paths) : ".";
+    const args = reactCompilerMarkerArgs(scanRoot);
     return {
-      bin: localBin("react-compiler-marker"),
-      args: [scanRoot],
-      label: `react-compiler-marker ${scanRoot}`,
+      tool: "react-compiler-marker",
+      args,
+      label: `react-compiler-marker ${args.join(" ")}`,
     };
   }
 
@@ -280,13 +310,13 @@ function layerInvocation(layerId, plan) {
       const globs = plan.roots.map((r) => `${r}/**/*.{css,scss}`);
       if (stack.styleGlob && plan.roots.length === 1) {
         return {
-          bin: localBin("stylelint"),
+          tool: "stylelint",
           args: [stack.styleGlob],
           label: `stylelint ${stack.styleGlob}`,
         };
       }
       return {
-        bin: localBin("stylelint"),
+        tool: "stylelint",
         args: globs,
         label: `stylelint ${globs.join(" ")}`,
       };
@@ -296,7 +326,7 @@ function layerInvocation(layerId, plan) {
       return { skip: true, skipReason: "no CSS/SCSS in path list" };
     }
     return {
-      bin: localBin("stylelint"),
+      tool: "stylelint",
       args: files,
       label: `stylelint ${files.join(" ")}`,
     };
@@ -366,7 +396,7 @@ function formatDuration(ms) {
  * @param {typeof LAYERS[number]} layer
  * @param {number} index
  * @param {number} total
- * @param {{ skip?: boolean; skipReason?: string; bin: string; args: string[]; label: string }} invocation
+ * @param {{ skip?: boolean; skipReason?: string; tool: string; args: string[]; label: string }} invocation
  */
 function runLayer(layer, index, total, invocation) {
   const step = `${index + 1}/${total}`;
@@ -400,12 +430,7 @@ function runLayer(layer, index, total, invocation) {
   const prefix = tone.dim("  │ ");
 
   return new Promise((resolve) => {
-    const child = spawn(invocation.bin, invocation.args, {
-      cwd: projectRoot,
-      shell: process.platform === "win32",
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawnCli(invocation.tool, invocation.args);
 
     function pipeStream(stream) {
       stream.on("data", (chunk) => {
