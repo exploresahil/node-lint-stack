@@ -1,0 +1,30 @@
+{
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "lint:biome": "biome check",
+    "lint:eslint": "eslint __LINT_STACK_ESLINT_CLI__ --max-warnings 0",
+    "lint:react-compiler": "react-compiler-marker",
+    "lint:styles": "stylelint \"__LINT_STACK_STYLE_GLOB__\"",
+    "format": "biome format --write",
+    "format:unsafe": "biome check --write --unsafe"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "@eslint/js": "^10.0.1",
+    "babel-plugin-react-compiler": "1.0.0",
+    "colord": "^2.10.0",
+    "eslint": "^10.10.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-compiler": "^19.1.0-rc.2",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "eslint-plugin-unicorn": "^75.0.0",
+    "postcss-scss": "^4.0.9",
+    "react-compiler-marker": "^0.2.0",
+    "sass": "latest",
+    "stylelint": "^16.26.1",
+    "stylelint-config-standard-scss": "^13.1.0",
+    "typescript": "^5",
+    "typescript-eslint": "^8.70.0"
+  }
+}
