@@ -337,10 +337,83 @@ function buildEslintConfig(text, withReactCompiler) {
     .replace(/\s*"react-compiler\/react-compiler": "error",\n/, "");
 }
 
-/** @param {string} srcDir */
-function eslintFileGlobs(srcDir) {
-  const base = srcDir.replace(/\\/g, "/").replace(/\/$/, "");
-  return [`${base}/**/*.{ts,tsx,mts,js,jsx,mjs,cjs}`];
+/** @param {string[]} roots */
+function eslintFileGlobsFromRoots(roots) {
+  return roots.map((root) => {
+    const base = root.replace(/\\/g, "/").replace(/\/$/, "");
+    return `${base}/**/*.{ts,tsx,mts,js,jsx,mjs,cjs}`;
+  });
+}
+
+/** @param {string} rootDir @param {{ workspaces?: unknown }} pkg */
+function discoverMonorepoPackages(rootDir, pkg) {
+  const workspaces = pkg.workspaces;
+  if (!workspaces) {
+    return null;
+  }
+  const patterns = Array.isArray(workspaces)
+    ? workspaces
+    : typeof workspaces === "object" &&
+        workspaces !== null &&
+        "packages" in workspaces &&
+        Array.isArray(workspaces.packages)
+      ? workspaces.packages
+      : [];
+  /** @type {string[]} */
+  const dirs = [];
+  for (const pattern of patterns) {
+    const norm = String(pattern).replace(/\\/g, "/");
+    if (norm.includes("*")) {
+      const idx = norm.indexOf("*");
+      const base = norm.slice(0, idx);
+      const parent = path.join(rootDir, base);
+      if (!fs.existsSync(parent)) {
+        continue;
+      }
+      for (const ent of fs.readdirSync(parent, { withFileTypes: true })) {
+        if (!ent.isDirectory()) {
+          continue;
+        }
+        const rel = `${base}${ent.name}`.replace(/\\/g, "/");
+        if (fs.existsSync(path.join(rootDir, rel, "package.json"))) {
+          dirs.push(rel);
+        }
+      }
+    } else if (fs.existsSync(path.join(rootDir, norm, "package.json"))) {
+      dirs.push(norm);
+    }
+  }
+  return dirs.length > 0 ? dirs : null;
+}
+
+/** @param {string} targetDir @param {{ workspaces?: unknown }} pkg @param {string} srcDir */
+function buildLintLayout(targetDir, pkg, srcDir) {
+  const ws = discoverMonorepoPackages(targetDir, pkg);
+  if (!ws) {
+    return {
+      lintRoots: [srcDir],
+      packages: [],
+      eslintCli: srcDir,
+      eslintFiles: eslintFileGlobsFromRoots([srcDir]),
+      styleGlob: `${srcDir}/**/*.{css,scss}`,
+    };
+  }
+  /** @type {Array<{ path: string; src: string }>} */
+  const packages = ws.map((p) => ({ path: p, src: srcDir }));
+  const lintRoots = packages.map(({ path: pkgPath, src }) => {
+    const candidate = `${pkgPath}/${src}`.replace(/\\/g, "/");
+    if (fs.existsSync(path.join(targetDir, candidate))) {
+      return candidate;
+    }
+    return pkgPath.replace(/\\/g, "/");
+  });
+  return {
+    lintRoots,
+    packages,
+    eslintCli: lintRoots.join(" "),
+    eslintFiles: eslintFileGlobsFromRoots(lintRoots),
+    styleGlob: lintRoots.map((r) => `"${r}/**/*.{css,scss}"`).join(" "),
+  };
 }
 
 /** @param {LayerSelection} layers */
@@ -372,10 +445,6 @@ async function main() {
 
   const targetDir = path.resolve(flags.dir ?? process.cwd());
   const srcDir = (flags.src ?? "src").replace(/\\/g, "/").replace(/\/$/, "");
-  const styleGlob = `${srcDir}/**/*.{css,scss}`;
-  const eslintCli = srcDir;
-  const eslintFiles = eslintFileGlobs(srcDir);
-  const eslintFilesJson = JSON.stringify(eslintFiles);
 
   let templateDir = path.join(packageRoot, "template");
   if (flags.from) {
@@ -388,6 +457,11 @@ async function main() {
   }
 
   const { pkgPath, pkg } = readTargetPackageJson(targetDir);
+  const layout = buildLintLayout(targetDir, pkg, srcDir);
+  const { lintRoots, packages, eslintCli, eslintFiles, styleGlob } = layout;
+  const eslintFilesJson = JSON.stringify(eslintFiles);
+  const lintRootsJson = JSON.stringify(lintRoots);
+  const packagesJson = JSON.stringify(packages);
   const projectName =
     flags.name ?? (typeof pkg.name === "string" ? pkg.name : "project");
 
@@ -405,7 +479,11 @@ async function main() {
   }
 
   console.log(`\nInstalling into ${targetDir}`);
-  console.log(`Layers: ${formatLayerSummary(layers)}\n`);
+  console.log(`Layers: ${formatLayerSummary(layers)}`);
+  if (packages.length > 0) {
+    console.log(`Monorepo lint roots: ${lintRoots.join(", ")}`);
+  }
+  console.log("");
 
   const force = Boolean(flags.force);
 
@@ -452,7 +530,9 @@ async function main() {
       .replaceAll("__LINT_STACK_ESLINT__", String(layers.eslint))
       .replaceAll("__LINT_STACK_REACT_COMPILER__", String(layers.reactCompiler))
       .replaceAll("__LINT_STACK_STYLELINT__", String(layers.stylelint))
-      .replaceAll("__LINT_STACK_BIOME_NEXT__", String(detectNext && layers.biome));
+      .replaceAll("__LINT_STACK_BIOME_NEXT__", String(detectNext && layers.biome))
+      .replaceAll("__LINT_STACK_LINT_ROOTS__", lintRootsJson)
+      .replaceAll("__LINT_STACK_PACKAGES__", packagesJson);
     const dest = path.join(targetDir, ".lint-stack.json");
     if (fs.existsSync(dest) && !force) {
       console.log("  skip (exists): .lint-stack.json");

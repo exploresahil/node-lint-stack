@@ -92,6 +92,26 @@ npm run lint
 
 The lint TUI runs each **enabled** layer in order (Biome → ESLint → Compiler → Stylelint). If one fails, the rest still run; exit code is non-zero if any layer failed.
 
+### Lint one or more paths
+
+Pass files or directories after `--` (Windows paths with `()` are fine):
+
+```bash
+npm run lint -- src/components/Button.tsx
+npm run lint -- "src/app/(client)/_components/GlobalOcrProcessStatus.client.tsx"
+```
+
+Each layer only runs when the path matches its file types (e.g. Stylelint is skipped for a `.tsx`-only list). React Compiler marker scans the **workspace package** that contains the file (see monorepo), or the repo root when paths span packages.
+
+### Monorepos
+
+If root `package.json` has npm **`workspaces`**, the installer discovers packages and writes `.lint-stack.json`:
+
+- `lintRoots` — e.g. `["apps/web/src", "packages/ui/src"]`
+- `packages` — `{ "path": "apps/web", "src": "src" }` for marker scoping
+
+`npm run lint` lints all roots. ESLint flat config gets one glob per root. Re-run install with `--force` after adding workspaces.
+
 Per-layer scripts: `lint:biome`, `lint:eslint`, `lint:react-compiler`, `lint:styles`, plus `format` / `format:unsafe` when Biome is installed.
 
 ## What gets added (by layer)
