@@ -255,6 +255,7 @@ function main() {
   const force = Boolean(flags.force);
   const rootFiles = [
     ".lint-stack.json",
+    ".npmrc",
     "eslint.config.mjs",
     "eslint.sonar-extended.mjs",
     "biome.json",
