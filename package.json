@@ -8,7 +8,8 @@
     "node-lint-stack": "./bin/install.mjs"
   },
   "files": [
-    "bin",
+    "bin/install.mjs",
+    "bin/pick-layers.mjs",
     "template",
     "stack.manifest.json",
     "README.md"

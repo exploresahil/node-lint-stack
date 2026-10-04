@@ -12,6 +12,17 @@ From the project root:
 npx github:exploresahil/node-lint-stack
 ```
 
+On a TTY, an interactive checklist opens first:
+
+- **↑ / ↓** — move highlight  
+- **Space** — toggle the focused row (Biome, ESLint, React Compiler, Stylelint)  
+- **Select all layers** — toggle every layer on or off  
+- **Enter** — install the checked layers  
+
+React Compiler turns on ESLint automatically (ESLint plugin). Turning off ESLint turns off React Compiler.
+
+Non-interactive: `npx github:exploresahil/node-lint-stack -- --all` or `--no-styles` / `--no-biome` etc.
+
 Pin a branch:
 
 ```bash
