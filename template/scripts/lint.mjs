@@ -215,15 +215,21 @@ function reactCompilerMarkerArgs(scanRoot) {
   return args;
 }
 
+/** --max-warnings gate from .lint-stack.json: number (default 0), null disables. */
+function maxWarningsArgs() {
+  const value = stack.maxWarnings;
+  if (value === null) {
+    return [];
+  }
+  return ["--max-warnings", String(typeof value === "number" ? value : 0)];
+}
+
 /** @param {string} relPosix */
 function assertUnderProject(relPosix) {
   const abs = path.resolve(projectRoot, relPosix);
   const rel = path.relative(projectRoot, abs);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(`Path escapes project root: ${relPosix}`);
-  }
-  if (!fs.existsSync(abs)) {
-    throw new Error(`Path not found: ${relPosix}`);
   }
 }
 
@@ -237,11 +243,19 @@ function buildLintPlan(argv) {
   if (raw.length === 0) {
     return { mode: "full", paths: [], roots };
   }
-  const paths = raw.map((p) => {
-    const rel = toPosixRel(p);
-    assertUnderProject(rel);
-    return rel;
-  });
+  const paths = raw
+    .map((p) => {
+      const rel = toPosixRel(p);
+      assertUnderProject(rel);
+      return rel;
+    })
+    .filter((rel) => {
+      if (fs.existsSync(path.resolve(projectRoot, rel))) {
+        return true;
+      }
+      console.log(`skip (not found): ${rel}`);
+      return false;
+    });
   return { mode: "files", paths, roots };
 }
 
@@ -272,20 +286,22 @@ function layerInvocation(layerId, plan) {
 
   if (layerId === "eslint") {
     if (plan.mode === "full") {
+      const args = [...plan.roots, ...maxWarningsArgs()];
       return {
         tool: "eslint",
-        args: [...plan.roots, "--max-warnings", "0"],
-        label: `eslint ${plan.roots.join(" ")} --max-warnings 0`,
+        args,
+        label: `eslint ${args.join(" ")}`,
       };
     }
     const files = extFilter(plan.paths, ESLINT_EXT);
     if (files.length === 0) {
       return { skip: true, skipReason: "no ESLint-compatible files in path list" };
     }
+    const args = [...files, ...maxWarningsArgs()];
     return {
       tool: "eslint",
-      args: [...files, "--max-warnings", "0"],
-      label: `eslint ${files.join(" ")} --max-warnings 0`,
+      args,
+      label: `eslint ${args.join(" ")}`,
     };
   }
 

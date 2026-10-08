@@ -32,7 +32,7 @@ Interactive (default on a TTY):
 Options:
   --dir <path>           Target project (default: cwd)
   --from <owner/repo>    Template source (default: bundled template/)
-  --src <dir>            Source folder for ESLint/stylelint (default: src)
+  --src <dir>            Force a single lint root (default: auto-detect)
   --name <label>         Banner name (default: package.json name)
   --next                 Enable Biome "next" domain (Next.js apps)
   --all, -y, --yes       Install all layers (skip picker)
@@ -238,14 +238,23 @@ function readManifest(manifestPath) {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 
-/** @param {Record<string, string>} scripts @param {LayerSelection} layers @param {string} srcDir @param {string} styleGlob */
-function filterScripts(scripts, layers, srcDir, styleGlob) {
+/** @param {Record<string, string>} scripts @param {LayerSelection} layers @param {string} eslintCli @param {string} styleGlob @param {number | null} maxWarnings */
+function filterScripts(scripts, layers, eslintCli, styleGlob, maxWarnings) {
+  const styleQuoted = styleGlob
+    .split(" ")
+    .filter(Boolean)
+    .map((g) => `"${g}"`)
+    .join(" ");
+  const maxWarningsArg =
+    maxWarnings == null ? "" : `--max-warnings ${maxWarnings}`;
   /** @type {Record<string, string>} */
   const out = { ...scripts };
   for (const [key, value] of Object.entries(out)) {
     out[key] = value
-      .replaceAll("__LINT_STACK_ESLINT_CLI__", srcDir)
-      .replaceAll("__LINT_STACK_STYLE_GLOB__", styleGlob);
+      .replaceAll("__LINT_STACK_ESLINT_CLI__", eslintCli)
+      .replaceAll("__LINT_STACK_STYLE_GLOB__", styleQuoted)
+      .replaceAll("__LINT_STACK_MAX_WARNINGS_ARGS__", maxWarningsArg)
+      .trimEnd();
   }
 
   if (!layers.biome) {
@@ -341,8 +350,95 @@ function buildEslintConfig(text, withReactCompiler) {
 function eslintFileGlobsFromRoots(roots) {
   return roots.map((root) => {
     const base = root.replace(/\\/g, "/").replace(/\/$/, "");
+    if (base === "." || base === "") {
+      return `**/*.{ts,tsx,mts,js,jsx,mjs,cjs}`;
+    }
     return `${base}/**/*.{ts,tsx,mts,js,jsx,mjs,cjs}`;
   });
+}
+
+/** Top-level dirs never worth linting as a source root. */
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  "tmp",
+  "temp",
+]);
+
+/** Top-level code dirs that are not npm packages. */
+const LOOSE_CODE_DIRS = new Set(["scripts"]);
+
+const LINTABLE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts"]);
+
+/** @param {string} dirAbs */
+function hasLintableCode(dirAbs) {
+  /** @param {string} dir @returns {boolean} */
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.isDirectory()) {
+        if (ent.name.startsWith(".") || SKIP_DIRS.has(ent.name)) {
+          continue;
+        }
+        if (walk(path.join(dir, ent.name))) {
+          return true;
+        }
+      } else if (LINTABLE_EXTS.has(path.extname(ent.name))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return walk(dirAbs);
+}
+
+/**
+ * Top-level package dirs (sibling repos / submodules without npm workspaces)
+ * and conventional code dirs (scripts/).
+ * @param {string} targetDir @param {string} srcDir
+ * @returns {{ pkgDirs: string[]; looseDirs: string[] }}
+ */
+function discoverTopLevel(targetDir, srcDir) {
+  const pkgDirs = [];
+  const looseDirs = [];
+  for (const ent of fs.readdirSync(targetDir, { withFileTypes: true })) {
+    if (
+      !ent.isDirectory() ||
+      ent.name.startsWith(".") ||
+      ent.name === srcDir ||
+      SKIP_DIRS.has(ent.name)
+    ) {
+      continue;
+    }
+    const abs = path.join(targetDir, ent.name);
+    if (fs.existsSync(path.join(abs, "package.json"))) {
+      pkgDirs.push(ent.name);
+    } else if (LOOSE_CODE_DIRS.has(ent.name) && hasLintableCode(abs)) {
+      looseDirs.push(ent.name);
+    }
+  }
+  return { pkgDirs: pkgDirs.sort(), looseDirs: looseDirs.sort() };
+}
+
+/** @param {string} targetDir @param {string} pkgPath @param {string} src */
+function packageLintRoot(targetDir, pkgPath, src) {
+  const candidate = `${pkgPath}/${src}`.replace(/\\/g, "/");
+  return fs.existsSync(path.join(targetDir, candidate))
+    ? candidate
+    : pkgPath.replace(/\\/g, "/");
+}
+
+/** @param {string[]} lintRoots @param {Array<{ path: string; src: string }>} packages */
+function layoutFromRoots(lintRoots, packages) {
+  return {
+    lintRoots,
+    packages,
+    eslintCli: lintRoots.join(" "),
+    eslintFiles: eslintFileGlobsFromRoots(lintRoots),
+    styleGlob: lintRoots.map((r) => `${r}/**/*.{css,scss}`).join(" "),
+  };
 }
 
 /** @param {string} rootDir @param {{ workspaces?: unknown }} pkg */
@@ -386,34 +482,32 @@ function discoverMonorepoPackages(rootDir, pkg) {
   return dirs.length > 0 ? dirs : null;
 }
 
-/** @param {string} targetDir @param {{ workspaces?: unknown }} pkg @param {string} srcDir */
-function buildLintLayout(targetDir, pkg, srcDir) {
+/**
+ * Lint roots: npm workspaces packages, else sibling package dirs + src + scripts.
+ * `--src` forces a single root on non-workspace repos (skips detection).
+ * @param {string} targetDir @param {{ workspaces?: unknown }} pkg @param {string} srcDir @param {boolean} srcExplicit
+ */
+function buildLintLayout(targetDir, pkg, srcDir, srcExplicit) {
   const ws = discoverMonorepoPackages(targetDir, pkg);
-  if (!ws) {
-    return {
-      lintRoots: [srcDir],
-      packages: [],
-      eslintCli: srcDir,
-      eslintFiles: eslintFileGlobsFromRoots([srcDir]),
-      styleGlob: `${srcDir}/**/*.{css,scss}`,
-    };
+  if (srcExplicit && !ws) {
+    return layoutFromRoots([srcDir], []);
   }
-  /** @type {Array<{ path: string; src: string }>} */
-  const packages = ws.map((p) => ({ path: p, src: srcDir }));
-  const lintRoots = packages.map(({ path: pkgPath, src }) => {
-    const candidate = `${pkgPath}/${src}`.replace(/\\/g, "/");
-    if (fs.existsSync(path.join(targetDir, candidate))) {
-      return candidate;
-    }
-    return pkgPath.replace(/\\/g, "/");
-  });
-  return {
-    lintRoots,
-    packages,
-    eslintCli: lintRoots.join(" "),
-    eslintFiles: eslintFileGlobsFromRoots(lintRoots),
-    styleGlob: lintRoots.map((r) => `"${r}/**/*.{css,scss}"`).join(" "),
-  };
+  const { pkgDirs, looseDirs } = discoverTopLevel(targetDir, srcDir);
+  /** @type {string[]} */
+  const lintRoots = [];
+  if (fs.existsSync(path.join(targetDir, srcDir))) {
+    lintRoots.push(srcDir);
+  }
+  for (const p of ws ?? pkgDirs) {
+    lintRoots.push(packageLintRoot(targetDir, p, srcDir));
+  }
+  lintRoots.push(...looseDirs);
+  const roots = [...new Set(lintRoots)];
+  if (roots.length === 0) {
+    roots.push("."); // no src/, no packages, no scripts — code lives at the repo root
+  }
+  const packages = (ws ?? pkgDirs).map((p) => ({ path: p, src: srcDir }));
+  return layoutFromRoots(roots, packages);
 }
 
 /** @param {LayerSelection} layers */
@@ -432,6 +526,24 @@ function formatLayerSummary(layers) {
     names.push("Stylelint");
   }
   return names.join(" → ");
+}
+
+/** @param {string} targetDir Existing maxWarnings policy survives re-installs. */
+function readExistingMaxWarnings(targetDir) {
+  try {
+    const prev = JSON.parse(
+      fs.readFileSync(path.join(targetDir, ".lint-stack.json"), "utf8"),
+    );
+    if (
+      prev &&
+      (prev.maxWarnings === null || typeof prev.maxWarnings === "number")
+    ) {
+      return prev.maxWarnings;
+    }
+  } catch {
+    // no previous stack config
+  }
+  return 0;
 }
 
 async function main() {
@@ -457,8 +569,9 @@ async function main() {
   }
 
   const { pkgPath, pkg } = readTargetPackageJson(targetDir);
-  const layout = buildLintLayout(targetDir, pkg, srcDir);
+  const layout = buildLintLayout(targetDir, pkg, srcDir, flags.src != null);
   const { lintRoots, packages, eslintCli, eslintFiles, styleGlob } = layout;
+  const maxWarnings = readExistingMaxWarnings(targetDir);
   const eslintFilesJson = JSON.stringify(eslintFiles);
   const lintRootsJson = JSON.stringify(lintRoots);
   const packagesJson = JSON.stringify(packages);
@@ -480,9 +593,7 @@ async function main() {
 
   console.log(`\nInstalling into ${targetDir}`);
   console.log(`Layers: ${formatLayerSummary(layers)}`);
-  if (packages.length > 0) {
-    console.log(`Monorepo lint roots: ${lintRoots.join(", ")}`);
-  }
+  console.log(`Lint roots: ${lintRoots.join(", ")}`);
   console.log("");
 
   const force = Boolean(flags.force);
@@ -499,19 +610,28 @@ async function main() {
 
   if (layers.eslint) {
     ensureLegacyPeerDepsNpmrc(targetDir, force);
-    let eslintText = readTemplateText(templateDir, "eslint.config.mjs");
-    eslintText = buildEslintConfig(
-      eslintText.replace("__LINT_STACK_ESLINT_FILES_ARRAY__", eslintFilesJson),
-      layers.reactCompiler,
+    // ESLint resolves the nearest config per file: a repo-owned
+    // eslint.config.js/.cjs/.ts would shadow anything we write as .mjs.
+    const repoConfig = ["eslint.config.js", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"].find(
+      (name) => fs.existsSync(path.join(targetDir, name)),
     );
-    const eslintDest = path.join(targetDir, "eslint.config.mjs");
-    if (fs.existsSync(eslintDest) && !force) {
-      console.log("  skip (exists): eslint.config.mjs");
+    if (repoConfig) {
+      console.log(`  keep (repo config wins): ${repoConfig}`);
     } else {
-      fs.writeFileSync(eslintDest, eslintText);
-      console.log("  wrote: eslint.config.mjs");
+      let eslintText = readTemplateText(templateDir, "eslint.config.mjs");
+      eslintText = buildEslintConfig(
+        eslintText.replace("__LINT_STACK_ESLINT_FILES_ARRAY__", eslintFilesJson),
+        layers.reactCompiler,
+      );
+      const eslintDest = path.join(targetDir, "eslint.config.mjs");
+      if (fs.existsSync(eslintDest) && !force) {
+        console.log("  skip (exists): eslint.config.mjs");
+      } else {
+        fs.writeFileSync(eslintDest, eslintText);
+        console.log("  wrote: eslint.config.mjs");
+      }
+      copyIfAllowed(templateDir, targetDir, "eslint.sonar-extended.mjs", force);
     }
-    copyIfAllowed(templateDir, targetDir, "eslint.sonar-extended.mjs", force);
   }
 
   if (layers.stylelint) {
@@ -523,6 +643,7 @@ async function main() {
     let stackText = readTemplateText(templateDir, ".lint-stack.json");
     stackText = stackText
       .replaceAll("__LINT_STACK_PROJECT_NAME__", projectName)
+      .replaceAll("__LINT_STACK_MAX_WARNINGS__", String(maxWarnings))
       .replaceAll("__LINT_STACK_ESLINT_FILES__", eslintFilesJson)
       .replaceAll("__LINT_STACK_ESLINT_CLI__", eslintCli)
       .replaceAll("__LINT_STACK_STYLE_GLOB__", styleGlob)
@@ -547,8 +668,9 @@ async function main() {
   const mergedScripts = filterScripts(
     manifest.scripts,
     layers,
-    srcDir,
+    eslintCli,
     styleGlob,
+    maxWarnings,
   );
   pkg.scripts = { ...pkg.scripts, ...mergedScripts };
   pkg.devDependencies = {

@@ -1,5 +1,6 @@
 {
   "projectName": "__LINT_STACK_PROJECT_NAME__",
+  "maxWarnings": __LINT_STACK_MAX_WARNINGS__,
   "eslintFiles": __LINT_STACK_ESLINT_FILES__,
   "eslintCli": "__LINT_STACK_ESLINT_CLI__",
   "styleGlob": "__LINT_STACK_STYLE_GLOB__",

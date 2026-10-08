@@ -37,5 +37,12 @@ export default {
       },
     ],
   },
-  ignoreFiles: ["**/node_modules/**", "**/.next/**", "**/generated/**"],
+  ignoreFiles: [
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/generated/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+  ],
 };

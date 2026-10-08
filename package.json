@@ -7,6 +7,9 @@
   "bin": {
     "node-lint-stack": "./bin/install.mjs"
   },
+  "scripts": {
+    "test": "node selftest.mjs"
+  },
   "files": [
     "bin/install.mjs",
     "bin/pick-layers.mjs",

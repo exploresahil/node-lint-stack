@@ -71,7 +71,7 @@ npx github:exploresahil/node-lint-stack -- --dir . --src src --next --force
 |------|---------|
 | `--dir <path>` | Target project (default: current directory) |
 | `--from owner/repo` | Template from another GitHub repo (`owner/repo` or `#branch`) |
-| `--src <dir>` | ESLint / Stylelint root (default: `src`) |
+| `--src <dir>` | Force a single lint root (default: auto-detect) |
 | `--name <label>` | Title in `npm run lint` banner (default: `package.json` name) |
 | `--next` | Force Biome `next` domain (auto if `next` is a dependency) |
 | `--all`, `-y`, `--yes` | All layers; skip picker |
@@ -101,16 +101,31 @@ npm run lint -- src/components/Button.tsx
 npm run lint -- "src/app/(client)/_components/GlobalOcrProcessStatus.client.tsx"
 ```
 
-Each layer only runs when the path matches its file types (e.g. Stylelint is skipped for a `.tsx`-only list). React Compiler marker scans the **workspace package** that contains the file (see monorepo), or the repo root when paths span packages.
+Each layer only runs when the path matches its file types (e.g. Stylelint is skipped for a `.tsx`-only list). Paths that do not exist are skipped with a note instead of failing the run. React Compiler marker scans the **workspace package** that contains the file (see lint roots), or the repo root when paths span packages.
 
-### Monorepos
+### Lint roots (auto-detected)
 
-If root `package.json` has npm **`workspaces`**, the installer discovers packages and writes `.lint-stack.json`:
+The installer derives lint roots from the repo layout — independent repos and monorepos both work with no extra flags:
 
-- `lintRoots` — e.g. `["apps/web/src", "packages/ui/src"]`
-- `packages` — `{ "path": "apps/web", "src": "src" }` for marker scoping
+| Layout | Roots |
+|--------|-------|
+| npm **`workspaces`** monorepo | every workspace package: `pkg/src` (or `pkg` when it has no `src`) |
+| Multi-package repo without workspaces (sibling `package.json` dirs, git submodules) | same rule per top-level package |
+| Independent repo | `src/` when present, otherwise the repo root (`.`) |
+| Top-level `scripts/` containing code | added whenever it exists |
 
-`npm run lint` lints all roots. ESLint flat config gets one glob per root. Re-run install with `--force` after adding workspaces.
+`--src <dir>` forces a single root instead of auto-detecting. The result is written to `.lint-stack.json` (`lintRoots`, `eslintCli`, `styleGlob`, `packages` — `{ "path": "apps/web", "src": "src" }` for marker scoping). Edit those and re-run `npm run lint` to adjust without reinstalling. Re-run install with `--force` after adding workspaces.
+
+If the repo already has its own `eslint.config.*`, the installer keeps it (ESLint resolves the nearest config per file) and does not write the stack's `eslint.config.mjs`.
+
+### Warning gate (`maxWarnings`)
+
+`.lint-stack.json` controls whether ESLint warnings fail `npm run lint`:
+
+- `0` (default) — any warning fails the run
+- `null` — report-only; only errors fail
+
+Re-installs preserve the value already in `.lint-stack.json`.
 
 Per-layer scripts: `lint:biome`, `lint:eslint`, `lint:react-compiler`, `lint:styles`, plus `format` / `format:unsafe` when Biome is installed.
 
@@ -136,3 +151,7 @@ Re-run the installer with `--force` to refresh configs from the template.
 - Node 20+
 - Git (only for `--from` when cloning a remote template)
 - TypeScript recommended for type-aware ESLint (`projectService`)
+
+## Development
+
+`npm test` runs `selftest.mjs`: installs the stack into throwaway fixtures (independent, submodule-style, npm-workspaces, bare-root repos) and asserts the derived lint roots, merged `package.json` scripts, and `maxWarnings` handling.
